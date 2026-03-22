@@ -1,0 +1,314 @@
+---
+title: "Home Credit Modeling Notebook"
+author: "Phan Chung"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: show
+    theme: cosmo
+execute:
+  warning: false
+  message: false
+  echo: true
+---
+
+# Modeling Overview
+
+This notebook builds a practical modeling workflow for Home Credit Default Risk with a strong focus on **out-of-sample AUC**, because the target is highly imbalanced (~8% default rate). 
+
+The notebook covers:
+
+1. Baseline benchmark (majority class and simple logistic regression)
+2. Candidate model comparison with 3-fold cross-validation
+3. Class imbalance strategies (none vs. SMOTE vs. downsampling)
+4. Randomized hyperparameter search for the best model
+5. Impact of supplementary features
+6. Kaggle submission generation
+
+To keep runtime manageable, hyperparameter tuning uses a 5K sample, 3-fold CV, and randomized search with ~20 iterations.
+
+---
+
+# 1) Setup
+
+```{r setup}
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(pROC)
+library(xgboost)
+library(randomForest)
+library(ROSE)        # For ovun.sample (sampling strategies)
+library(ggplot2)
+
+set.seed(42)
+
+cat("✅ Packages loaded\n")
+```
+
+---
+
+# 2) Load Data
+
+We use processed train/test data if available, because it already includes engineered and supplementary features.
+
+```{r load-data}
+# Prefer processed data from your preparation notebook
+train_path_processed <- "application_train_processed.csv"
+test_path_processed <- "application_test_processed.csv"
+
+if (file.exists(train_path_processed) && file.exists(test_path_processed)) {
+  train <- fread(train_path_processed)
+  test <- fread(test_path_processed)
+  cat("✅ Loaded processed train/test data\n")
+} else if (file.exists("application_train.csv") && file.exists("application_test.csv")) {
+  train <- fread("application_train.csv")
+  test <- fread("application_test.csv")
+  cat("⚠️ Processed files not found; loaded raw application files\n")
+} else if (file.exists("Data/application_train.csv") && file.exists("application_test.csv")) {
+  train <- fread("Data/application_train.csv")
+  test <- fread("application_test.csv")
+  cat("⚠️ Processed files not found; loaded Data/application_train.csv + application_test.csv\n")
+} else if (file.exists("../application_train.csv") && file.exists("../application_test.csv")) {
+  train <- fread("../application_train.csv")
+  test <- fread("../application_test.csv")
+  cat("⚠️ Loaded train/test from parent folder\n")
+} else if (file.exists("../Data/application_train.csv") && file.exists("../application_test.csv")) {
+  train <- fread("../Data/application_train.csv")
+  test <- fread("../application_test.csv")
+  cat("⚠️ Loaded train/test from parent Data folder\n")
+} else {
+  stop("Could not find train/test files. Check file paths in the load-data chunk.")
+}
+
+cat("Train shape:", nrow(train), "x", ncol(train), "\n")
+cat("Test shape:", nrow(test), "x", ncol(test), "\n")
+```
+
+---
+
+# 3) Establish Baseline Performance
+
+A baseline helps us understand whether more complex models add real value.
+
+## 3.1 Majority Class Baseline
+
+```{r baseline-majority}
+# Check target balance
+class_counts <- table(train$TARGET)
+class_props <- prop.table(class_counts)
+
+print(class_counts)
+print(round(class_props, 4))
+
+# Majority class prediction: always predict 0
+majority_class <- as.numeric(names(which.max(class_counts)))
+y_true <- train$TARGET
+y_pred_majority <- rep(majority_class, length(y_true))
+y_prob_majority <- rep(0, length(y_true))  # constant score
+
+baseline_accuracy <- mean(y_pred_majority == y_true)
+baseline_auc <- as.numeric(auc(y_true, y_prob_majority))
+
+cat("Majority baseline accuracy:", round(baseline_accuracy, 4), "\n")
+cat("Majority baseline AUC:", round(baseline_auc, 4), "\n")
+```
+
+**Interpretation:** High accuracy here is expected due to class imbalance and is not useful. AUC of ~0.50 confirms no ranking ability.
+
+## 3.2 Simple Logistic Regression Baseline
+
+To keep runtime fast, we use a small predictor subset on a 5K sample.
+
+```{r baseline-logistic}
+# Sample for quick baseline
+sample_idx <- sample(1:nrow(train), min(5000, nrow(train)))
+train_small <- train[sample_idx, ]
+
+# Select a minimal predictor set if available
+candidate_vars <- c(
+  "EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3",
+  "AMT_CREDIT", "AMT_INCOME_TOTAL", "AMT_ANNUITY",
+  "DAYS_BIRTH", "DAYS_EMPLOYED"
+)
+
+use_vars <- intersect(candidate_vars, names(train_small))
+
+logit_df <- train_small %>%
+  select(all_of(c("TARGET", use_vars)))
+
+# Basic NA handling for logistic model
+for (col in names(logit_df)) {
+  if (is.numeric(logit_df[[col]])) {
+    logit_df[[col]][is.na(logit_df[[col]])] <- median(logit_df[[col]], na.rm = TRUE)
+  }
+}
+
+# Fit logistic model
+formula_logit <- as.formula(paste("TARGET ~", paste(use_vars, collapse = " + ")))
+logit_model <- glm(formula_logit, data = logit_df, family = binomial())
+
+logit_probs <- predict(logit_model, newdata = logit_df, type = "response")
+logit_preds <- ifelse(logit_probs > 0.5, 1, 0)
+
+logit_accuracy <- mean(logit_preds == logit_df$TARGET)
+logit_auc <- as.numeric(auc(logit_df$TARGET, logit_probs))
+
+cat("Logistic baseline accuracy:", round(logit_accuracy, 4), "\n")
+cat("Logistic baseline AUC:", round(logit_auc, 4), "\n")
+```
+
+---
+
+# 4) Candidate Model Comparison (3-Fold CV)
+
+We compare model families by **cross-validated out-of-sample AUC**.
+
+```{r prep-model-data}
+# Remove identifier and split target
+drop_cols <- intersect(c("SK_ID_CURR"), names(train))
+model_df <- train %>% select(-all_of(drop_cols))
+
+# Separate target
+y <- model_df$TARGET
+X <- model_df %>% select(-TARGET)
+
+# Basic preprocessing for mixed models:
+# 1) Encode character/factor as integers
+for (col in names(X)) {
+  if (!is.numeric(X[[col]])) {
+    X[[col]] <- as.numeric(as.factor(X[[col]]))
+  }
+}
+
+# 2) Replace NA with sentinel for tree models
+X[is.na(X)] <- -999
+
+# For speed in exploration: use sample
+cv_idx <- sample(1:nrow(X), min(10000, nrow(X)))
+X_cv <- X[cv_idx, ]
+y_cv <- y[cv_idx]
+
+# 3-fold stratified folds
+folds <- createFolds(y_cv, k = 3, list = TRUE, returnTrain = FALSE)
+
+cat("CV sample rows:", nrow(X_cv), "\n")
+```
+
+```{r cv-helper-functions}
+cv_auc_logistic <- function(X_df, y_vec, folds) {
+  aucs <- c()
+  for (i in seq_along(folds)) {
+    test_idx <- folds[[i]]
+    train_idx <- setdiff(seq_len(nrow(X_df)), test_idx)
+
+    X_train <- X_df[train_idx, ]
+    y_train <- y_vec[train_idx]
+    X_test <- X_df[test_idx, ]
+    y_test <- y_vec[test_idx]
+
+    # Median imputation for logistic
+    for (col in names(X_train)) {
+      med <- median(X_train[[col]], na.rm = TRUE)
+      X_train[[col]][is.na(X_train[[col]])] <- med
+      X_test[[col]][is.na(X_test[[col]])] <- med
+    }
+
+    train_df <- cbind(TARGET = y_train, X_train)
+    model <- glm(TARGET ~ ., data = train_df, family = binomial())
+    probs <- predict(model, newdata = X_test, type = "response")
+
+    aucs <- c(aucs, as.numeric(auc(y_test, probs)))
+  }
+  aucs
+}
+
+cv_auc_rf <- function(X_df, y_vec, folds, ntree = 200) {
+  aucs <- c()
+  for (i in seq_along(folds)) {
+    test_idx <- folds[[i]]
+    train_idx <- setdiff(seq_len(nrow(X_df)), test_idx)
+
+    X_train <- X_df[train_idx, ]
+    y_train <- as.factor(y_vec[train_idx])
+    X_test <- X_df[test_idx, ]
+    y_test <- y_vec[test_idx]
+
+    rf_model <- randomForest(
+      x = X_train,
+      y = y_train,
+      ntree = ntree,
+      importance = FALSE
+    )
+
+    probs <- predict(rf_model, X_test, type = "prob")[, "1"]
+    aucs <- c(aucs, as.numeric(auc(y_test, probs)))
+  }
+  aucs
+}
+
+cv_auc_xgb <- function(X_df, y_vec, folds, params = list()) {
+  aucs <- c()
+
+  # Default fast params
+  default_params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = 6,
+    eta = 0.1,
+    subsample = 0.8,
+    colsample_bytree = 0.8
+  )
+  params <- modifyList(default_params, params)
+
+  for (i in seq_along(folds)) {
+    test_idx <- folds[[i]]
+    train_idx <- setdiff(seq_len(nrow(X_df)), test_idx)
+
+    X_train <- as.matrix(X_df[train_idx, ])
+    y_train <- y_vec[train_idx]
+    X_test <- as.matrix(X_df[test_idx, ])
+    y_test <- y_vec[test_idx]
+
+    dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+    dtest <- xgb.DMatrix(data = X_test)
+
+    xgb_model <- xgb.train(
+      params = params,
+      data = dtrain,
+      nrounds = 120,
+      verbose = 0
+    )
+
+    probs <- predict(xgb_model, dtest)
+    aucs <- c(aucs, as.numeric(auc(y_test, probs)))
+  }
+  aucs
+}
+```
+
+```{r candidate-models-cv}
+# Logistic Regression
+auc_logit <- cv_auc_logistic(X_cv, y_cv, folds)
+
+# Random Forest
+auc_rf <- cv_auc_rf(X_cv, y_cv, folds, ntree = 200)
+
+# XGBoost (no imbalance adjustment yet)
+auc_xgb <- cv_auc_xgb(X_cv, y_cv, folds)
+
+model_compare <- tibble(
+  Model = c("Logistic Regression", "Random Forest", "XGBoost"),
+  Mean_AUC = c(mean(auc_logit), mean(auc_rf), mean(auc_xgb)),
+  SD_AUC = c(sd(auc_logit), sd(auc_rf), sd(auc_xgb))
+)
+
+model_compare %>% arrange(desc(Mean_AUC))
+```
+
+```{r model-comparison-plot}
+ggplot(model_compare, aes(x = reorder(Model, Mean_AUC), y = Mean_AUC)) +
+  geom_col(fill = "steelblue", alpha = 0.8
