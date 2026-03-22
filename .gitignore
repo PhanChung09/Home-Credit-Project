@@ -28,6 +28,9 @@ Thumbs.db
 *.pdf
 *.docx
 
+# Keep Modeling report tracked
+!Modeling.html
+
 # Logs and temp
 *.log
 *.tmp
