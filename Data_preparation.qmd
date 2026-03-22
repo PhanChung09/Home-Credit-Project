@@ -1,0 +1,259 @@
+---
+title: "Home Credit - Data Preparation and Feature Engineering"
+format:
+  html:
+    toc: true
+    code-fold: show
+execute:
+  warning: false
+  message: false
+---
+
+# Reusable Train/Test Feature Engineering Script
+
+```{r}
+library(data.table)
+library(dplyr)
+library(tidyr)
+```
+
+## 1) Utility helpers
+
+```{r}
+# Safe divide to avoid Inf/NaN in ratio features
+safe_divide <- function(num, den, default = NA_real_) {
+  out <- ifelse(!is.na(den) & den != 0, num / den, default)
+  return(out)
+}
+
+# Replace infinite values after ratio operations
+replace_infinite <- function(df, replacement = NA_real_) {
+  num_cols <- names(df)[sapply(df, is.numeric)]
+  for (col in num_cols) {
+    x <- df[[col]]
+    x[is.infinite(x)] <- replacement
+    df[[col]] <- x
+  }
+  df
+}
+```
+
+## 2) Application cleaning (train/test reusable)
+
+```{r}
+clean_application_core <- function(df) {
+  # 1) DAYS_EMPLOYED anomaly from EDA: 365243 placeholder
+  df <- df %>%
+    mutate(
+      DAYS_EMPLOYED_ANOM = as.integer(DAYS_EMPLOYED == 365243),
+      DAYS_EMPLOYED = ifelse(DAYS_EMPLOYED == 365243, NA_real_, DAYS_EMPLOYED)
+    )
+
+  # 2) Missing indicators for EXT_SOURCE variables
+  for (v in c("EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3")) {
+    if (v %in% names(df)) {
+      df[[paste0(v, "_MISS")]] <- as.integer(is.na(df[[v]]))
+    }
+  }
+
+  # 3) Convert negative day fields to positive interpretable units
+  if ("DAYS_BIRTH" %in% names(df)) {
+    df$AGE_YEARS <- abs(df$DAYS_BIRTH) / 365.25
+  }
+  if ("DAYS_EMPLOYED" %in% names(df)) {
+    df$EMPLOYED_YEARS <- abs(df$DAYS_EMPLOYED) / 365.25
+  }
+
+  # 4) Other known issue from EDA: DAYS_LAST_PHONE_CHANGE weird negatives
+  if ("DAYS_LAST_PHONE_CHANGE" %in% names(df)) {
+    df <- df %>% mutate(DAYS_LAST_PHONE_CHANGE = ifelse(DAYS_LAST_PHONE_CHANGE > 0, NA, DAYS_LAST_PHONE_CHANGE))
+  }
+
+  df
+}
+```
+
+## 3) Fit/train-time statistics (store and reuse on test)
+
+```{r}
+fit_preprocess_stats <- function(train_df) {
+  stats <- list()
+
+  # Medians from TRAIN only
+  ext_vars <- intersect(c("EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"), names(train_df))
+  stats$ext_medians <- sapply(ext_vars, function(v) median(train_df[[v]], na.rm = TRUE))
+
+  # Binning thresholds from TRAIN only
+  if ("AGE_YEARS" %in% names(train_df)) {
+    stats$age_breaks <- unique(quantile(train_df$AGE_YEARS, probs = c(0, .2, .4, .6, .8, 1), na.rm = TRUE))
+  }
+  if ("AMT_INCOME_TOTAL" %in% names(train_df)) {
+    stats$income_breaks <- unique(quantile(train_df$AMT_INCOME_TOTAL, probs = c(0, .2, .4, .6, .8, 1), na.rm = TRUE))
+  }
+
+  stats
+}
+```
+
+## 4) Apply imputations + engineered features
+
+```{r}
+apply_preprocess_and_engineer <- function(df, stats) {
+  # Impute EXT_SOURCE with TRAIN medians
+  if (!is.null(stats$ext_medians)) {
+    for (v in names(stats$ext_medians)) {
+      if (v %in% names(df)) {
+        df[[v]][is.na(df[[v]])] <- stats$ext_medians[[v]]
+      }
+    }
+  }
+
+  # Demographic + stability features
+  df <- df %>%
+    mutate(
+      # Employment-to-age proportion
+      EMPLOYED_AGE_RATIO = safe_divide(EMPLOYED_YEARS, AGE_YEARS),
+
+      # External source summary score
+      EXT_SOURCE_MEAN = rowMeans(select(., any_of(c("EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"))), na.rm = TRUE)
+    )
+
+  # Financial ratios (common lending ratios)
+  df <- df %>%
+    mutate(
+      CREDIT_INCOME_RATIO = safe_divide(AMT_CREDIT, AMT_INCOME_TOTAL),
+      ANNUITY_INCOME_RATIO = safe_divide(AMT_ANNUITY, AMT_INCOME_TOTAL),
+      CREDIT_ANNUITY_RATIO = safe_divide(AMT_CREDIT, AMT_ANNUITY),
+      INCOME_PER_PERSON = safe_divide(AMT_INCOME_TOTAL, CNT_FAM_MEMBERS),
+      GOODS_CREDIT_DIFF = AMT_CREDIT - AMT_GOODS_PRICE,
+      GOODS_CREDIT_RATIO = safe_divide(AMT_GOODS_PRICE, AMT_CREDIT),
+      # Approximate loan-to-value proxy when goods price available
+      LOAN_TO_VALUE_PROXY = safe_divide(AMT_CREDIT, AMT_GOODS_PRICE)
+    )
+
+  # Interaction terms
+  df <- df %>%
+    mutate(
+      AGE_X_CREDIT_INCOME = AGE_YEARS * CREDIT_INCOME_RATIO,
+      EMPLOYED_X_ANNUITY_INCOME = EMPLOYED_YEARS * ANNUITY_INCOME_RATIO
+    )
+
+  # Binned variables using TRAIN thresholds
+  if (!is.null(stats$age_breaks) && length(stats$age_breaks) > 2) {
+    df$AGE_BIN <- cut(df$AGE_YEARS, breaks = stats$age_breaks, include.lowest = TRUE, ordered_result = TRUE)
+  }
+  if (!is.null(stats$income_breaks) && length(stats$income_breaks) > 2) {
+    df$INCOME_BIN <- cut(df$AMT_INCOME_TOTAL, breaks = stats$income_breaks, include.lowest = TRUE, ordered_result = TRUE)
+  }
+
+  df <- replace_infinite(df)
+  df
+}
+```
+
+## 5) Supplementary aggregation functions (applicant level: SK_ID_CURR)
+
+```{r}
+aggregate_bureau <- function(bureau_df) {
+  bureau_df %>%
+    group_by(SK_ID_CURR) %>%
+    summarise(
+      BUREAU_CREDIT_COUNT = n(),
+      BUREAU_ACTIVE_COUNT = sum(CREDIT_ACTIVE == "Active", na.rm = TRUE),
+      BUREAU_CLOSED_COUNT = sum(CREDIT_ACTIVE == "Closed", na.rm = TRUE),
+      BUREAU_OVERDUE_SUM = sum(CREDIT_DAY_OVERDUE, na.rm = TRUE),
+      BUREAU_DEBT_SUM = sum(AMT_CREDIT_SUM_DEBT, na.rm = TRUE),
+      BUREAU_CREDIT_SUM = sum(AMT_CREDIT_SUM, na.rm = TRUE),
+      BUREAU_DEBT_RATIO = safe_divide(BUREAU_DEBT_SUM, BUREAU_CREDIT_SUM, default = 0),
+      .groups = "drop"
+    )
+}
+
+aggregate_previous_application <- function(prev_df) {
+  prev_df %>%
+    group_by(SK_ID_CURR) %>%
+    summarise(
+      PREV_APP_COUNT = n(),
+      PREV_APPROVED_COUNT = sum(NAME_CONTRACT_STATUS == "Approved", na.rm = TRUE),
+      PREV_REFUSED_COUNT = sum(NAME_CONTRACT_STATUS == "Refused", na.rm = TRUE),
+      PREV_APPROVAL_RATE = safe_divide(PREV_APPROVED_COUNT, PREV_APP_COUNT, default = 0),
+      PREV_REFUSAL_RATE = safe_divide(PREV_REFUSED_COUNT, PREV_APP_COUNT, default = 0),
+      .groups = "drop"
+    )
+}
+
+aggregate_installments <- function(inst_df) {
+  inst_df %>%
+    mutate(
+      DAYS_LATE = DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT,
+      LATE_FLAG = as.integer(DAYS_LATE > 0)
+    ) %>%
+    group_by(SK_ID_CURR) %>%
+    summarise(
+      INSTAL_COUNT = n(),
+      INSTAL_LATE_COUNT = sum(LATE_FLAG, na.rm = TRUE),
+      INSTAL_LATE_PCT = safe_divide(INSTAL_LATE_COUNT, INSTAL_COUNT, default = 0),
+      INSTAL_DAYS_LATE_MEAN = mean(DAYS_LATE[DAYS_LATE > 0], na.rm = TRUE),
+      INSTAL_PAYMENT_MEAN = mean(AMT_PAYMENT, na.rm = TRUE),
+      INSTAL_PAYMENT_TREND = safe_divide(
+        mean(AMT_PAYMENT[NUM_INSTALMENT_NUMBER > median(NUM_INSTALMENT_NUMBER, na.rm = TRUE)], na.rm = TRUE),
+        mean(AMT_PAYMENT[NUM_INSTALMENT_NUMBER <= median(NUM_INSTALMENT_NUMBER, na.rm = TRUE)], na.rm = TRUE),
+        default = 1
+      ),
+      .groups = "drop"
+    )
+}
+```
+
+## 6) Join all aggregated supplementary features
+
+```{r}
+join_supplementary_features <- function(app_df, bureau_agg, prev_agg, inst_agg) {
+  app_df %>%
+    left_join(bureau_agg, by = "SK_ID_CURR") %>%
+    left_join(prev_agg, by = "SK_ID_CURR") %>%
+    left_join(inst_agg, by = "SK_ID_CURR")
+}
+```
+
+## 7) Train/Test consistency function
+
+```{r}
+align_train_test_columns <- function(train_df, test_df, target_col = "TARGET") {
+  train_cols <- setdiff(names(train_df), target_col)
+  test_cols <- names(test_df)
+
+  # Add missing cols to test
+  missing_in_test <- setdiff(train_cols, test_cols)
+  for (col in missing_in_test) {
+    test_df[[col]] <- NA
+  }
+
+  # Remove extra cols from test
+  extra_in_test <- setdiff(test_cols, train_cols)
+  if (length(extra_in_test) > 0) {
+    test_df <- test_df %>% select(-all_of(extra_in_test))
+  }
+
+  # Reorder test to match train feature order
+  test_df <- test_df %>% select(all_of(train_cols))
+
+  list(train = train_df, test = test_df)
+}
+```
+
+## 8) End-to-end pipeline callable for train and test
+
+```{r}
+process_train_test <- function(app_train, app_test, bureau, prev_app, installments) {
+  # Clean base application
+  train_clean <- clean_application_core(app_train)
+  test_clean <- clean_application_core(app_test)
+
+  # Fit train-only stats and apply to both
+  stats <- fit_preprocess_stats(train_clean)
+  train_feat <- apply_preprocess_and_engineer(train_clean, stats)
+  test_feat <- apply_preprocess_and_engineer(test_clean, stats)
+
+  # Aggregate supplementary data once
+  bureau_agg <- aggregate_bureau(bureau
