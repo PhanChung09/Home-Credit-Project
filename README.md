@@ -1,3 +1,5 @@
+<h1>Jane Doe</h1>
+<p>Data Scientist & University Student</p>
 # Home Credit Default Risk Project
 
 ## Overview
