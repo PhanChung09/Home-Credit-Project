@@ -31,6 +31,7 @@ Thumbs.db
 # Keep selected rendered reports tracked
 !Modeling.html
 !HOME_CREDIT_EDA.html
+!Data_preparation.html
 
 # Logs and temp
 *.log
