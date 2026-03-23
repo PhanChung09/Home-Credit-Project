@@ -30,7 +30,7 @@ This project develops an end-to-end default-risk pipeline for Home Credit, inclu
 - `POS_CASH_balance.csv`
 - `sample_submission.csv`
 
-## Key Findings (EDA)
+## {Key Findings (EDA)}(https://github.com/PhanChung09/home-credit-project/blob/main/HOME_CREDIT_EDA.html)
 - Target is highly imbalanced (~92% non-default vs ~8% default)
 - Majority-class baseline can show high accuracy but weak discrimination; AUC is the primary metric
 - Strong predictors include `EXT_SOURCE_*`, age-related fields, and credit history features
