@@ -99,6 +99,12 @@ quarto render Data_preparation.qmd
 quarto render Modeling.qmd
 quarto render MODEL_CARD_NOTEBOOK.qmd
 ```
+## Group solution to the business problem.
+The scope of this project includes exploratory data analysis of applicant and credit behavior data collected from multiple sources, followed by the development of a predictive analytics model to identify loan applicants at high risk of default. Model performance is evaluated using the Area Under the Receiver Operating Characteristic Curve (ROC–AUC) to assess discriminatory power. The model is designed to support safer, more inclusive loan approval decisions for applicants with limited credit histories and does not include post-approval loan monitoring or recovery strategies.
+
+## Contribution to the project
+This project was completed as an individual assignment. I was responsible for the entire project lifecycle, utilizing AI-driven analysis to perform deep-dive data cleaning and model evaluation for the Home Credit dataset.
+
 ## Business Value of Solutions
 ### 1. Expanding Financial Inclusion (The "Revenue" Value)
 Many people are "unbanked" or have "thin" credit files (little to no history). Traditional scoring models often reject these people automatically because they look like a "blank slate," which the system interprets as high risk.
