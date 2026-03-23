@@ -69,12 +69,12 @@ This project develops an end-to-end default-risk pipeline for Home Credit, inclu
 - Selected tuned XGBoost and retrained on full training data
 
 ### Kaggle
-- Submission file generated in modeling notebook
+- Submission file generated in the modeling notebook
 - Public leaderboard AUC: **0.794**
 
 ## Model Card Assignment Notebook (`MODEL_CARD_NOTEBOOK.qmd`)
 
-This notebook covers required assignment sections:
+This notebook covers the required assignment sections:
 - Model Details
 - Intended Use
 - Performance Metrics (CV AUC, Kaggle AUC, precision/recall at threshold)
