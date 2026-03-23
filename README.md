@@ -1,5 +1,8 @@
 # Home Credit Default Project
-## Overview
+## Business Problem and Objective
+### Business Problem
+Many potential borrowers face barriers to obtaining home loans due to stringent banking requirements and complex lending criteria. Home Credit International seeks to enhance financial inclusion by extending credit to applicants with limited traditional credit histories while simultaneously controlling the risk of loan default. By utilizing historical loan application data and credit behavior information collected from multiple data sources, the objective is to develop a predictive model that estimates the probability of loan repayment or default prior to loan approval.
+### Objective
 This project develops an end-to-end default-risk pipeline for Home Credit, including:
 - exploratory analysis,
 - reusable data preparation and feature engineering,
