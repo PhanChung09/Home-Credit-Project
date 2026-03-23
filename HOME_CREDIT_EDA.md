@@ -1,0 +1,240 @@
+# Home Credit Default Risk - Comprehensive Exploratory Data Analysis
+Phan Chung
+2026-03-22
+
+# Introduction and Objective
+
+Many potential borrowers face barriers to obtaining home loans due to
+stringent banking requirements and complex lending criteria. Home Credit
+International seeks to enhance financial inclusion by extending credit
+to applicants with limited traditional credit histories while
+simultaneously controlling the risk of loan default. By utilizing
+historical loan application data and credit behavior information
+collected from multiple data sources, the objective is to develop a
+predictive model that estimates the probability of loan repayment or
+default prior to loan approval.
+
+We will explore: 1. Target variable distribution and baseline accuracy
+2. Key predictors and their relationships with the target 3. Missing
+data patterns and imputation strategies 4. Data quality issues,
+anomalies, and outliers 5. Data transformations needed for modeling 6.
+Aggregating and joining supplementary transactional data
+
+## Library Loading
+
+``` r
+library(tidyverse)
+library(data.table)
+library(ggplot2)
+library(corrplot)
+library(skimr)
+library(scales)
+library(gridExtra)
+
+# Set visualization theme
+theme_set(theme_minimal(base_size = 12))
+```
+
+## Data Loading
+
+Let’s load the primary application files.
+
+``` r
+# Using data.table::fread for fast loading
+train <- fread("application_train.csv")
+test <- fread("application_test.csv")
+
+cat("Training set dimensions:", dim(train)[1], "rows,", dim(train)[2], "columns\n")
+cat("Test set dimensions:", dim(test)[1], "rows,", dim(test)[2], "columns\n")
+```
+
+------------------------------------------------------------------------
+
+# 1. Target Variable Analysis
+
+## Distribution and Imbalance
+
+*Question: Explore the target variable in
+application\_{train\|test}.csv. Is the data unbalanced with respect to
+the target? What would the accuracy be for a simple model consisting in
+a majority class classifier?*
+
+``` r
+# Check target distribution
+target_counts <- table(train$TARGET)
+target_props <- prop.table(target_counts)
+
+# Create a summary dataframe
+target_summary <- data.frame(
+  Class = c("0 (Repaid)", "1 (Default)"),
+  Count = as.numeric(target_counts),
+  Percentage = as.numeric(target_props) * 100
+)
+
+print(target_summary)
+
+# Visualize the imbalance
+ggplot(target_summary, aes(x = Class, y = Count, fill = Class)) +
+  geom_col(alpha = 0.8) +
+  geom_text(aes(label = paste0(round(Percentage, 1), "%")), vjust = -0.5) +
+  scale_y_continuous(labels = comma) +
+  scale_fill_manual(values = c("steelblue", "darkred")) +
+  labs(title = "Target Variable Distribution",
+       subtitle = "Severe Class Imbalance Detected",
+       x = "Target Class",
+       y = "Number of Applicants") +
+  theme(legend.position = "none")
+```
+
+## Baseline Majority Class Classifier
+
+**Interpretation:** Yes, the data is **highly imbalanced**.
+Approximately 91.9% of loans are repaid (Class 0) and only 8.1% default
+(Class 1). This is an imbalance ratio of roughly 11.4:1.
+
+If we built a “majority class classifier” - a naive model that simply
+predicts “0 (Repaid)” for every single applicant - this model would
+achieve an **accuracy of 91.92%**.
+
+**Why this is a problem:** Because of this extreme imbalance, pure
+accuracy is a terrible metric for this project. A useless model
+(predicting 0 for everyone) achieves 92% accuracy! We must use **Area
+Under the ROC Curve (AUC)** as our evaluation metric instead, as it
+measures the model’s ability to discriminate between the two classes
+regardless of their distribution. We will also need to consider
+techniques like class weighting or SMOTE during modeling.
+
+------------------------------------------------------------------------
+
+# 2. Key Predictors Exploration
+
+*Question: Explore the relationship between target and predictors,
+looking for potentially strong predictors that could be included later
+in a model. Which are most predictive of the target? Visualize and
+interpret these relationships.*
+
+Based on domain knowledge and previous competition solutions, the
+external source scores from credit bureaus are typically the strongest
+predictors. Let’s examine these and a few structural variables.
+
+## External Credit Scores
+
+``` r
+# Select the external sources and target
+ext_data <- train %>% 
+  select(TARGET, EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3) %>%
+  mutate(TARGET = as.factor(TARGET))
+
+# Correlation matrix for external sources
+cor_data <- train %>% 
+  select(TARGET, EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3) %>%
+  drop_na()
+  
+cat("Correlations with TARGET:\n")
+cor(cor_data)[1,]
+
+# Create density plots for external sources by Target
+p1 <- ggplot(ext_data, aes(x = EXT_SOURCE_1, fill = TARGET)) + 
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("steelblue", "darkred"), labels = c("Repaid", "Default")) +
+  labs(title = "EXT_SOURCE_1 Distribution") +
+  theme(legend.position = "none")
+
+p2 <- ggplot(ext_data, aes(x = EXT_SOURCE_2, fill = TARGET)) + 
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("steelblue", "darkred"), labels = c("Repaid", "Default")) +
+  labs(title = "EXT_SOURCE_2 Distribution") +
+  theme(legend.position = "none")
+
+p3 <- ggplot(ext_data, aes(x = EXT_SOURCE_3, fill = TARGET)) + 
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("steelblue", "darkred"), labels = c("Repaid", "Default")) +
+  labs(title = "EXT_SOURCE_3 Distribution")
+
+grid.arrange(p1, p2, p3, ncol = 3, widths = c(1, 1, 1.4))
+```
+
+**Interpretation:** The `EXT_SOURCE_*` variables represent normalized
+scores from external data sources (likely credit bureaus). All three
+show a clear negative correlation with default risk: **lower external
+scores indicate a much higher probability of default**. The
+distributions for defaulters (red) are shifted significantly to the left
+compared to those who repaid (blue). These are exceptionally strong
+predictors that must be included in any model.
+
+## Demographic and Age Features
+
+Let’s look at applicant age (`DAYS_BIRTH`). Note: Home Credit stores
+dates as negative days relative to the current application. We’ll
+convert to positive years.
+
+``` r
+# Convert DAYS_BIRTH to Age in Years
+age_data <- train %>%
+  select(TARGET, DAYS_BIRTH) %>%
+  mutate(
+    Age_Years = as.integer(abs(DAYS_BIRTH) / 365),
+    Age_Group = cut(Age_Years, breaks = seq(20, 70, by=5))
+  )
+
+# Calculate default rate by age group
+age_defaults <- age_data %>%
+  group_by(Age_Group) %>%
+  summarise(
+    Total = n(),
+    Defaults = sum(TARGET),
+    Default_Rate = (Defaults / Total) * 100
+  ) %>%
+  drop_na()
+
+# Plot
+ggplot(age_defaults, aes(x = Age_Group, y = Default_Rate)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = paste0(round(Default_Rate, 1), "%")), vjust = -0.5) +
+  labs(title = "Default Rate by Applicant Age",
+       subtitle = "Risk clearly decreases as applicants get older",
+       x = "Age Group (Years)",
+       y = "Default Rate (%)")
+```
+
+**Interpretation:** There is a striking, near-linear relationship
+between age and default risk. The youngest applicants (20-25 years)
+default at a rate of 12.3%, while the oldest (65-70 years) default at
+only 3.7%. Age (`DAYS_BIRTH`) is highly predictable of target.
+
+------------------------------------------------------------------------
+
+# 3. Missing Data Analysis
+
+*Question: Explore the scope of missing data in
+application\_{train\|test}.csv and come up with possible solutions.
+Remove rows? Remove columns? Impute? Explain your proposed solution.*
+
+``` r
+# Calculate missing data percentages for all columns
+missing_counts <- colSums(is.na(train))
+missing_df <- data.frame(
+  Feature = names(missing_counts),
+  Missing_Count = missing_counts,
+  Missing_Pct = (missing_counts / nrow(train)) * 100
+) %>%
+  filter(Missing_Count > 0) %>%
+  arrange(desc(Missing_Pct))
+
+cat("Number of columns with missing data:", nrow(missing_df), "out of", ncol(train), "\n\n")
+cat("Top 15 columns with most missing data:\n")
+print(head(missing_df, 15))
+
+# Plot missing value distribution
+ggplot(missing_df, aes(x = Missing_Pct)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of Missing Data Across Features",
+       x = "Percentage of Data Missing",
+       y = "Number of Features")
+```
+
+## Proposed Missing Data Strategy
+
+**Analysis:** The missing data problem is massive. 67 columns (out of
+122) have some missing data. Almost 50 features have \>40% missing data.
+Notably, \`EXT_SOURCE\_
