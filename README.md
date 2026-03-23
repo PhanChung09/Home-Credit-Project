@@ -37,7 +37,7 @@ This project develops an end-to-end default-risk pipeline for Home Credit, inclu
 - Key anomaly: `DAYS_EMPLOYED = 365243` placeholder value
 - Missingness is informative and explicitly modeled via indicators/imputation strategy
 
-## Data Preparation
+## [Data Preparation](https://github.com/PhanChung09/home-credit-project/blob/main/Data_preparation.html)
 `Data_preparation.qmd` provides reusable functions that:
 - fix known anomalies,
 - engineer demographic and financial-ratio features,
