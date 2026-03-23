@@ -1,6 +1,3 @@
-<h1>Jane Doe</h1>
-<p>Data Scientist & University Student</p>
-# Home Credit Default Risk Project
 
 ## Overview
 This project develops an end-to-end default-risk pipeline for Home Credit, including:
