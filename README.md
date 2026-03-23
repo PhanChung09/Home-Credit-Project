@@ -50,7 +50,7 @@ This project develops an end-to-end default-risk pipeline for Home Credit, inclu
 - Stored values are reused on test data
 - Train/test columns are aligned identically (except `TARGET`)
 
-## Modeling Notebook Summary (`Modeling.qmd`)
+## [Modeling Notebook Summary (`Modeling.qmd`)](https://github.com/PhanChung09/home-credit-project/blob/main/Modeling.html)
 
 ### Models Compared
 - Majority-class baseline
