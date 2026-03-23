@@ -15,7 +15,8 @@ This project develops an end-to-end default-risk pipeline for Home Credit, inclu
 - `Data_preparation.qmd` — Reusable train/test data preparation and feature engineering functions
 - `Modeling.qmd` — Full modeling workflow (benchmarks, model comparison, imbalance handling, tuning, final training, submission)
 - `Modeling.html` — Rendered modeling report
-- `MODEL_CARD.qmd` — Model card (performance, threshold analysis, fairness, risks)
+- `MODEL_CARD_NOTEBOOK.qmd` — Assignment model card notebook (executive summary, performance, threshold analysis, SHAP, fairness, risks)
+- `MODEL_CARD.qmd` — Extended model card version
 - `MODEL_CARD_README.md` — Quick guide to model card sections
 
 ### Core Data Sources
@@ -52,48 +53,41 @@ This project develops an end-to-end default-risk pipeline for Home Credit, inclu
 ## Modeling Notebook Summary (`Modeling.qmd`)
 
 ### Models Compared
-The modeling notebook evaluates multiple model families:
 - Majority-class baseline
-- Logistic regression (core feature set and expanded feature set)
-- Random Forest
-- XGBoost (gradient boosting)
+- Logistic regression (core and expanded predictor sets)
+- Random forest
+- XGBoost
 
-### Performance Comparison
-- Baseline majority model achieves high accuracy due to imbalance, but AUC near random
-- Logistic regression improves ranking vs. baseline but underperforms tree ensembles
-- Random Forest improves non-linear capture but is less efficient at this scale
-- XGBoost delivers the strongest out-of-sample AUC during 3-fold CV
+### Performance Summary
+- Baseline accuracy is inflated by imbalance and not sufficient
+- AUC-based comparison favored boosted trees
+- XGBoost delivered strongest out-of-sample CV AUC with practical training time
 
-### Class Imbalance Experiments
-The notebook compares:
-- no adjustment,
-- class weighting (`scale_pos_weight`),
-- upsampling,
-- downsampling.
+### Class Imbalance and Tuning
+- Compared no adjustment, class weighting, upsampling, and downsampling
+- Used randomized search (~20 iterations) with 5K sample and 3-fold CV
+- Selected tuned XGBoost and retrained on full training data
 
-Best practical performance came from **XGBoost with class weighting**, balancing predictive power and runtime.
-
-### Hyperparameter Tuning Strategy
-- Randomized search (about 20 iterations)
-- 5K-row sample for tuning speed
-- 3-fold CV for robust but efficient estimates
-- Final model retrained on full training data using best parameters
-
-### Why Final Model Was Selected
-The final model is **tuned XGBoost with imbalance adjustment and supplementary features** because it:
-- consistently produced the best estimated out-of-sample AUC,
-- handled class imbalance effectively,
-- benefited from engineered + aggregated bureau/previous/installment features,
-- and scaled efficiently for full-data training.
-
-### Kaggle Result
+### Kaggle
+- Submission file generated in modeling notebook
 - Public leaderboard AUC: **0.794**
-- Submission generated from final model in `submission_modeling.csv`
 
-## Model Performance Snapshot
-- Kaggle public AUC: **0.794**
-- Cross-validation AUC: approximately **0.76**
-- Threshold/business impact analysis documented in `MODEL_CARD.qmd`
+## Model Card Assignment Notebook (`MODEL_CARD_NOTEBOOK.qmd`)
+
+This notebook covers required assignment sections:
+- Model Details
+- Intended Use
+- Performance Metrics (CV AUC, Kaggle AUC, precision/recall at threshold)
+- Decision Threshold Analysis with cost assumptions and sensitivity analysis
+- Explainability (SHAP on 1,000-row sample)
+- Adverse Action Mapping
+- Fairness Analysis (`CODE_GENDER`, `NAME_EDUCATION_TYPE`)
+- Limitations and Risks
+- Executive Summary
+
+Speed-up constraints are explicitly implemented:
+- SHAP computed on a 1,000-row sample
+- Modeling workflow/model settings reused from `Modeling.qmd`
 
 ## How to Run
 
@@ -101,10 +95,8 @@ The final model is **tuned XGBoost with imbalance adjustment and supplementary f
 quarto render HOME_CREDIT_EDA.qmd
 quarto render Data_preparation.qmd
 quarto render Modeling.qmd
-quarto render MODEL_CARD.qmd
+quarto render MODEL_CARD_NOTEBOOK.qmd
 ```
-
-> If local data files are outside the repo path, update file paths in notebook load-data chunks before execution.
 
 ## Author
 Phan Chung
