@@ -28,8 +28,9 @@ Thumbs.db
 *.pdf
 *.docx
 
-# Keep Modeling report tracked
+# Keep selected rendered reports tracked
 !Modeling.html
+!HOME_CREDIT_EDA.html
 
 # Logs and temp
 *.log
