@@ -99,7 +99,38 @@ quarto render Data_preparation.qmd
 quarto render Modeling.qmd
 quarto render MODEL_CARD_NOTEBOOK.qmd
 ```
+## Business Value of Solutions
+### 1. Expanding Financial Inclusion (The "Revenue" Value)
+Many people are "unbanked" or have "thin" credit files (little to no history). Traditional scoring models often reject these people automatically because they look like a "blank slate," which the system interprets as high risk.
 
+The Value: By using AI to look at alternative data (like telco bills or transaction patterns), the business can safely approve loans for people who would have been rejected before.
+
+Result: This opens up an entirely new market of customers, increasing the company's total loan volume and revenue.
+
+### 2. Reducing Default Rates (The "Cost Saving" Value)
+Every time a customer fails to pay back a loan (a "default"), the company loses the principal amount plus the interest they expected to earn.
+
+The Value: Even a small increase in model accuracy (e.g., a 1% to 2% improvement in identifying "bad" applicants) can save a large lender millions of dollars per year.
+
+Result: Lowering the default rate directly increases the company's net profit margin.
+
+### 3. Operational Efficiency & Speed
+Manual credit reviews are slow and expensive. A loan officer can only review a few dozen applications a day.
+
+The Value: An AI model can process thousands of applications in milliseconds with consistent logic.
+
+Result: This reduces the "cost-per-application" and provides a better customer experience by giving instant approvals.
+
+## Key Takeaways
+In this project, I utilized AI-assisted workflows to develop a predictive model for the Home Credit Default Risk challenge on Kaggle. This experience provided hands-on expertise in the end-to-end data science lifecycle:
+
+Exploratory Data Analysis (EDA): I learned how to deep-dive into complex datasets to uncover hidden patterns and correlations between applicant profiles and repayment capabilities.
+
+Advanced Data Preprocessing: I practiced rigorous data cleaning and feature engineering to ensure the model received high-quality, normalized input.
+
+Model Selection & Training: I evaluated multiple machine learning algorithms, focusing on the trade-offs between different models to identify the most accurate predictor.
+
+Validation & Business Logic: I performed robust model validation to ensure the results were not just statistically sound, but also actionable for real-world financial risk and business decision-making.
 ## Author
 Phan Chung
 
